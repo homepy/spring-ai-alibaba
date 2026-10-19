@@ -29,6 +29,7 @@ import com.alibaba.cloud.ai.graph.exception.RunnableErrors;
 import com.alibaba.cloud.ai.graph.streaming.GraphFlux;
 import com.alibaba.cloud.ai.graph.streaming.ParallelGraphFlux;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
+import io.micrometer.observation.Observation;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -68,6 +69,13 @@ import static com.alibaba.cloud.ai.graph.internal.node.ParallelNode.getExecutor;
 public class NodeExecutor extends BaseGraphExecutor {
 
 	private static final Logger log = LoggerFactory.getLogger(NodeExecutor.class);
+
+	/**
+	 * Context key used by Micrometer's {@code ObservationThreadLocalAccessor}. The value
+	 * is duplicated here to avoid a hard runtime dependency on the optional
+	 * {@code context-propagation} module.
+	 */
+	private static final String OBSERVATION_CONTEXT_KEY = "micrometer.observation";
 
 	private final MainGraphExecutor mainGraphExecutor;
 
@@ -122,15 +130,39 @@ public class NodeExecutor extends BaseGraphExecutor {
 
 			context.doListeners(NODE_BEFORE, null);
 
-			CompletableFuture<Map<String, Object>> future = action.apply(context.getOverallState(),
-					context.getConfig());
+			// The listener creates the node observation in "before". Keep it current
+			// only while the node action is invoked so that eagerly created child
+			// observations are attached to the node span. Scopes must never be closed
+			// from another thread - the observation is propagated to asynchronous
+			// execution through the Reactor context below.
+			Observation nodeObservation = context.getCurrentNodeObservation();
+			CompletableFuture<Map<String, Object>> future;
+			if (nodeObservation != null) {
+				try (Observation.Scope ignored = nodeObservation.openScope()) {
+					future = action.apply(context.getOverallState(), context.getConfig());
+				}
+			}
+			else {
+				future = action.apply(context.getOverallState(), context.getConfig());
+			}
 
-			return Mono.fromFuture(future)
+			Flux<GraphResponse<NodeOutput>> execution = Mono.fromFuture(future)
 					.flatMapMany(updateState -> handleActionResult(context, updateState, resultValue))
 					.onErrorResume(error -> {
 						context.doListeners(ERROR, new Exception(error));
 						return Flux.just(GraphResponse.error(error));
 					});
+
+			if (nodeObservation != null) {
+				// Make the node observation the current one for reactive downstream
+				// operators. Spring AI reads the parent observation from this context
+				// entry when a streaming model call is subscribed later on another
+				// thread, and ObservationThreadLocalAccessor restores it per signal.
+				execution = execution
+					.contextWrite(contextView -> contextView.put(OBSERVATION_CONTEXT_KEY, nodeObservation));
+			}
+
+			return execution;
 
 		}
 		catch (Exception e) {

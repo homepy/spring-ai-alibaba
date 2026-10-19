@@ -27,6 +27,7 @@ import com.alibaba.cloud.ai.graph.streaming.OutputType;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.alibaba.cloud.ai.graph.utils.SystemClock;
 import com.alibaba.cloud.ai.graph.utils.TypeRef;
+import io.micrometer.observation.Observation;
 
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.metadata.Usage;
@@ -326,6 +327,26 @@ public class GraphRunnerContext {
 				log.error("Error in listener", ex);
 			}
 		}
+	}
+
+	/**
+	 * Returns the observation created for the node that is currently being executed, if
+	 * any lifecycle listener provides one.
+	 * <p>
+	 * The observation is used by the executor to make the node observation current while
+	 * the node action is invoked and to propagate it through Reactor's context. This
+	 * keeps child observations (for example model calls) attached to the node span even
+	 * when the node completes asynchronously on a different thread.
+	 * @return the current node observation, or {@code null} if none is available.
+	 */
+	public Observation getCurrentNodeObservation() {
+		for (GraphLifecycleListener listener : compiledGraph.compileConfig.lifecycleListeners()) {
+			Observation observation = listener.getNodeObservation(getCurrentNodeId(), getCurrentStateData());
+			if (observation != null) {
+				return observation;
+			}
+		}
+		return null;
 	}
 
 	/**

@@ -67,10 +67,26 @@ public class GraphObservationAutoConfiguration {
 
 		if (registry != ObservationRegistry.NOOP) {
 			try {
-				ContextRegistry.getInstance()
-						.registerThreadLocalAccessor(new ObservationThreadLocalAccessor(registry));
+				ContextRegistry contextRegistry = ContextRegistry.getInstance();
+				ObservationThreadLocalAccessor existingAccessor = contextRegistry.getThreadLocalAccessors()
+					.stream()
+					.filter(ObservationThreadLocalAccessor.class::isInstance)
+					.map(ObservationThreadLocalAccessor.class::cast)
+					.findFirst()
+					.orElse(null);
 
-				log.info("Successfully registered ObservationThreadLocalAccessor for Reactor context propagation");
+				// The accessor may already have been registered by Spring Boot (or by
+				// the Micrometer ServiceLoader) using a different ObservationRegistry.
+				// Replace it so that context propagation and graph observations share
+				// the application's registry.
+				if (existingAccessor == null || existingAccessor.getObservationRegistry() != registry) {
+					contextRegistry.registerThreadLocalAccessor(new ObservationThreadLocalAccessor(registry));
+					log.info("Successfully registered ObservationThreadLocalAccessor for Reactor context propagation");
+				}
+				else {
+					log.debug("ObservationThreadLocalAccessor is already registered with the application "
+							+ "ObservationRegistry");
+				}
 
 				Hooks.enableAutomaticContextPropagation();
 

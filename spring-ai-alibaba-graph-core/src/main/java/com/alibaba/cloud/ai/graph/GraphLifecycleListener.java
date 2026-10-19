@@ -15,6 +15,8 @@
  */
 package com.alibaba.cloud.ai.graph;
 
+import io.micrometer.observation.Observation;
+
 import java.util.Map;
 
 /**
@@ -82,6 +84,22 @@ public interface GraphLifecycleListener {
 	 * @param state  The final state of the graph after node completion.
 	 */
 	default void onComplete(String nodeId, Map<String, Object> state, RunnableConfig config) {
+	}
+
+	/**
+	 * Returns the observation that represents the execution of the given node, if this
+	 * listener creates one.
+	 * <p>
+	 * The graph runtime uses the returned observation to propagate the node observation
+	 * through reactive and asynchronous execution. Implementations that do not create
+	 * node observations must return {@code null}.
+	 * @param nodeId The unique identifier of the node.
+	 * @param state  The current state of the graph.
+	 * @return the node observation, or {@code null} when this listener does not create
+	 * one.
+	 */
+	default Observation getNodeObservation(String nodeId, Map<String, Object> state) {
+		return null;
 	}
 
 }

@@ -57,7 +57,6 @@ public class GraphObservationLifecycleListener implements GraphLifecycleListener
 	public static class GraphObservationContext {
 		final Observation graphObservation;
 		final Map<String, Observation> nodeObservations = new ConcurrentHashMap<>();
-		final Map<String, Observation.Scope> nodeScopes = new ConcurrentHashMap<>();
 
 		public GraphObservationContext(Observation graphObservation) {
 			this.graphObservation = graphObservation;
@@ -74,14 +73,6 @@ public class GraphObservationLifecycleListener implements GraphLifecycleListener
 		if (executionId != null) {
 			GraphObservationContext ctx = CONTEXTS.remove(executionId);
 			if (ctx != null) {
-				for (Observation.Scope scope : ctx.nodeScopes.values()) {
-					try {
-						scope.close();
-					} catch (Exception e) {
-						log.warn("Failed to close scope during unregister", e);
-					}
-				}
-				ctx.nodeScopes.clear();
 				ctx.nodeObservations.clear();
 			}
 		}
@@ -217,22 +208,20 @@ public class GraphObservationLifecycleListener implements GraphLifecycleListener
 				nodeInput);
 
 		nodeObservation.start();
-		// Open scope to propagate context
-		Observation.Scope scope = nodeObservation.openScope();
 
 		ctx.nodeObservations.put(nodeId, nodeObservation);
-		ctx.nodeScopes.put(nodeId, scope);
+	}
+
+	@Override
+	public Observation getNodeObservation(String nodeId, Map<String, Object> state) {
+		GraphObservationContext ctx = getContext(state);
+		return ctx != null ? ctx.nodeObservations.get(nodeId) : null;
 	}
 
 	private void stopNodeObservation(String nodeId, Map<String, Object> state) {
 		GraphObservationContext ctx = getContext(state);
 		if (ctx == null)
 			return;
-
-		Observation.Scope scope = ctx.nodeScopes.remove(nodeId);
-		if (scope != null) {
-			scope.close();
-		}
 
 		Observation nodeObservation = ctx.nodeObservations.remove(nodeId);
 		if (nodeObservation != null) {
@@ -256,11 +245,6 @@ public class GraphObservationLifecycleListener implements GraphLifecycleListener
 	private void handleError(String nodeId, Map<String, Object> state, Throwable ex) {
 		GraphObservationContext ctx = getContext(state);
 		if (ctx != null) {
-			Observation.Scope scope = ctx.nodeScopes.remove(nodeId);
-			if (scope != null) {
-				scope.close();
-			}
-
 			Observation nodeObservation = ctx.nodeObservations.remove(nodeId);
 			if (nodeObservation != null) {
 				// Record Failure Status
